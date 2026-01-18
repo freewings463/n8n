@@ -28,6 +28,176 @@ class DddTarget:
 SYSTEM_ANALYSIS_ROW_RE = re.compile(r"^\| `([^`]+)` \| (.*) \|\s*$")
 SYSTEM_ANALYSIS_TIME_RE = re.compile(r"^- 生成时间: (.+)$")
 
+IMPORT_FROM_RE = re.compile(r"\bfrom\s+['\"]([^'\"]+)['\"]")
+IMPORT_DYNAMIC_RE = re.compile(r"\bimport\(\s*['\"]([^'\"]+)['\"]\s*\)")
+REQUIRE_RE = re.compile(r"\brequire\(\s*['\"]([^'\"]+)['\"]\s*\)")
+
+TYPEORM_MODULE_MARKERS = ("typeorm", "@n8n/typeorm")
+NODE_FS_MODULE_MARKERS = (
+	"fs",
+	"fs/promises",
+	"node:fs",
+	"node:fs/promises",
+)
+NODE_HTTP_MODULE_MARKERS = (
+	"http",
+	"https",
+	"node:http",
+	"node:https",
+)
+NODE_CHILD_PROCESS_MODULE_MARKERS = (
+	"child_process",
+	"node:child_process",
+)
+TEST_MODULE_MARKERS = (
+	"@playwright/test",
+	"playwright",
+	"vitest",
+	"jest",
+	"@jest/globals",
+	"mocha",
+)
+HTTP_CLIENT_MODULE_MARKERS = (
+	"axios",
+	"node-fetch",
+	"undici",
+	"got",
+)
+
+
+def _read_text_file(path: Path) -> str | None:
+	try:
+		return path.read_text(encoding="utf-8")
+	except FileNotFoundError:
+		return None
+	except UnicodeDecodeError:
+		return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _extract_import_modules(code: str) -> set[str]:
+	modules: set[str] = set()
+	for rx in (IMPORT_FROM_RE, IMPORT_DYNAMIC_RE, REQUIRE_RE):
+		for m in rx.finditer(code):
+			modules.add(m.group(1))
+	return modules
+
+
+def _has_typeorm_import(modules: set[str]) -> bool:
+	return any(any(marker in m for marker in TYPEORM_MODULE_MARKERS) for m in modules)
+
+
+def _has_any_module(modules: set[str], markers: tuple[str, ...]) -> bool:
+	return any(m in modules for m in markers)
+
+
+def _imports_node_fs(modules: set[str]) -> bool:
+	return _has_any_module(modules, NODE_FS_MODULE_MARKERS)
+
+
+def _imports_node_http(modules: set[str]) -> bool:
+	return _has_any_module(modules, NODE_HTTP_MODULE_MARKERS)
+
+
+def _imports_child_process(modules: set[str]) -> bool:
+	return _has_any_module(modules, NODE_CHILD_PROCESS_MODULE_MARKERS)
+
+
+def _looks_like_test_file(source_path: str, code: str | None, modules: set[str]) -> bool:
+	path_norm = f"/{source_path}/"
+	if any(token in path_norm for token in ["/__tests__/", "/test/", "/tests/", ".test.", ".spec."]):
+		return True
+	if _has_any_module(modules, TEST_MODULE_MARKERS):
+		return True
+	if code and re.search(r"\b(describe|it|test)\s*\(", code):
+		return True
+	if code and re.search(r"\bexpect\s*\(", code):
+		return True
+	return False
+
+
+def _looks_like_express_adapter(code: str, modules: set[str]) -> bool:
+	if "express" not in modules:
+		return False
+	# Broader than middleware: adapter helpers/types that touch Request/Response.
+	return any(token in code for token in ("Request", "Response", "express.Request", "express.Response"))
+
+
+def _looks_like_websocket_adapter(code: str, modules: set[str]) -> bool:
+	if "ws" not in modules:
+		return False
+	return "WebSocket" in code
+
+
+def _looks_like_xml_schema_resource(code: str, modules: set[str]) -> bool:
+	return "xmllint-wasm" in modules and "XMLFileInfo" in code
+
+
+def _looks_like_http_client(code: str, modules: set[str]) -> bool:
+	if _has_any_module(modules, HTTP_CLIENT_MODULE_MARKERS):
+		return True
+	return "fetch(" in code
+
+
+def _looks_like_controller(code: str, modules: set[str]) -> bool:
+	if "@n8n/decorators" not in modules:
+		return False
+	return any(token in code for token in ("@RestController", "@Controller", "@RestController()", "@Controller()"))
+
+
+def _looks_like_middleware(code: str, modules: set[str]) -> bool:
+	if "express" not in modules:
+		return False
+	if "RequestHandler" in code or "NextFunction" in code:
+		return True
+	return bool(re.search(r"\(\s*req\s*,\s*res\s*,\s*next\s*\)", code))
+
+
+def _looks_like_response_error(code: str) -> bool:
+	if "ResponseError" not in code:
+		return False
+	return "extends ResponseError" in code or bool(re.search(r"\bclass\s+ResponseError\b", code))
+
+
+def _looks_like_typeorm_entity(code: str, modules: set[str]) -> bool:
+	return _has_typeorm_import(modules) and "@Entity" in code
+
+
+def _looks_like_typeorm_migration(code: str, modules: set[str]) -> bool:
+	if not _has_typeorm_import(modules):
+		return False
+	return "MigrationInterface" in code or "implements MigrationInterface" in code
+
+
+def _looks_like_typeorm_repository(code: str, modules: set[str]) -> bool:
+	if not _has_typeorm_import(modules):
+		return False
+	return any(token in code for token in ("extends Repository", "Repository<", "Repository ", "EntityManager"))
+
+
+def _looks_like_n8n_credential(code: str, modules: set[str]) -> bool:
+	return "n8n-workflow" in modules and "implements ICredentialType" in code
+
+
+def _looks_like_n8n_node(code: str, modules: set[str]) -> bool:
+	return "n8n-workflow" in modules and "implements INodeType" in code
+
+
+def _has_di_service_decorator(code: str, modules: set[str]) -> bool:
+	if "@n8n/di" not in modules:
+		return False
+	return "@Service" in code or "@Service()" in code
+
+
+def _strip_prefix_once(text: str, prefix: str) -> str:
+	return text[len(prefix) :] if text.startswith(prefix) else text
+
+
+def _tail_after(rel: str, marker: str) -> str | None:
+	needle = f"{marker}/"
+	if needle in rel:
+		return rel.split(needle, 1)[1]
+	return None
+
 
 def _to_service_name(package_id: str) -> str:
 	normalized = package_id.replace("@n8n/", "n8n-")
@@ -173,16 +343,267 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 	rel = _relative_to_package_root(row.source_path)
 	filename = Path(row.source_path).name
 	py_filename = _to_python_module_filename(filename)
+	code = _read_text_file(Path(row.source_path))
+	modules = _extract_import_modules(code) if code else set()
+
+	fallback_tail = _strip_prefix_once(rel, "src/")
+
+	# --- Code-first classification (职责优先) ---
+	if code:
+		# Tests/non-production code: keep separate from DDD layers but classify as Infrastructure for matrix.
+		if _looks_like_test_file(row.source_path, code, modules):
+			test_tail = fallback_tail
+			base_dir = "tests/unit"
+			if "playwright" in rel or "@playwright/test" in modules or "/playwright/" in f"/{row.source_path}/":
+				base_dir = "tests/integration/ui/playwright"
+			elif any(token in f"/{row.source_path}/" for token in ["/e2e/", "/integration/"]):
+				base_dir = "tests/integration"
+			elif any(token in f"/{row.source_path}/" for token in ["/fixtures/"]):
+				base_dir = "tests/fixtures"
+			elif any(token in f"/{row.source_path}/" for token in ["/mocks/", "/test-utils/", "/test_utils/"]):
+				base_dir = "tests/mocks"
+
+			# Avoid duplicated directory segments (e.g. tests/.../playwright/playwright/...).
+			if base_dir.endswith("/playwright") and test_tail.startswith("playwright/"):
+				test_tail = test_tail[len("playwright/") :]
+
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file(base_dir, test_tail, py_filename),
+				reason="Detected test/non-production code -> tests/*",
+				confidence="High",
+			)
+
+		# Protocol adapters (beyond middleware): express/ws/http request wrappers.
+		if _looks_like_middleware(code, modules):
+			tail = _tail_after(rel, "middlewares") or _tail_after(rel, "middleware") or fallback_tail
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/api/middleware", tail, py_filename),
+				reason="Detected Express RequestHandler-style middleware",
+				confidence="High",
+			)
+
+		if _looks_like_express_adapter(code, modules):
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/api", fallback_tail, py_filename),
+				reason="Detected Express Request/Response adapter/helper",
+				confidence="Medium",
+			)
+
+		if _looks_like_websocket_adapter(code, modules):
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/api/ws", fallback_tail, py_filename),
+				reason="Detected WebSocket adapter/types (ws)",
+				confidence="Medium",
+			)
+
+		if _looks_like_controller(code, modules):
+			tail = _tail_after(rel, "controllers") or fallback_tail
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/api/v1/controllers", tail, py_filename),
+				reason="Detected @RestController/@Controller from @n8n/decorators",
+				confidence="High",
+			)
+
+		if _looks_like_response_error(code):
+			tail = _tail_after(rel, "errors") or fallback_tail
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/api/errors", tail, py_filename),
+				reason="Detected ResponseError (HTTP-mapped error)",
+				confidence="High",
+			)
+
+		if _looks_like_typeorm_entity(code, modules):
+			tail = _tail_after(rel, "entities") or fallback_tail
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/persistence/models", tail, py_filename),
+				reason="Detected TypeORM @Entity model",
+				confidence="High",
+			)
+
+		if _looks_like_typeorm_migration(code, modules):
+			tail = _tail_after(rel, "migrations") or fallback_tail
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/persistence/migrations", tail, py_filename),
+				reason="Detected TypeORM MigrationInterface",
+				confidence="High",
+			)
+
+		if _looks_like_typeorm_repository(code, modules):
+			tail = _tail_after(rel, "repositories") or fallback_tail
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/persistence/repositories", tail, py_filename),
+				reason="Detected TypeORM Repository/EntityManager usage",
+				confidence="Medium",
+			)
+
+		if _looks_like_n8n_credential(code, modules):
+			tail = _tail_after(rel, "credentials") or fallback_tail
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/external_services/adapters/credentials", tail, py_filename),
+				reason="Detected ICredentialType adapter",
+				confidence="High",
+			)
+
+		if _looks_like_n8n_node(code, modules):
+			tail = _tail_after(rel, "nodes") or fallback_tail
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/external_services/adapters/nodes", tail, py_filename),
+				reason="Detected INodeType adapter",
+				confidence="High",
+			)
+
+		if _has_di_service_decorator(code, modules):
+			tail = _tail_after(rel, "services") or _tail_after(rel, "modules") or fallback_tail
+			return _target(
+				context,
+				"Application",
+				_join_dir_file("application/services", tail, py_filename),
+				reason="Detected @Service from @n8n/di",
+				confidence="Medium",
+			)
+
+		if _looks_like_xml_schema_resource(code, modules):
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration", fallback_tail, py_filename),
+				reason="Detected XML schema resource (xmllint-wasm XMLFileInfo)",
+				confidence="High",
+			)
+
+		# Node/runtime IO + external HTTP clients: infrastructure concerns.
+		if _imports_node_fs(modules) or _imports_child_process(modules) or _imports_node_http(modules) or _looks_like_http_client(code, modules):
+			base_dir = "infrastructure/container"
+			reason = "Detected runtime IO/external interaction -> infrastructure/container"
+			confidence = "Medium"
+			io_tail = fallback_tail
+
+			if "binary-data" in rel or "/binary-data/" in f"/{row.source_path}/":
+				base_dir = "infrastructure/external_services/adapters/file_storage/binary_data"
+				reason = "Detected binary data storage IO -> infrastructure file_storage adapter"
+				confidence = "High"
+				if io_tail.startswith("binary-data/"):
+					io_tail = io_tail[len("binary-data/") :]
+			elif any(token in f"/{row.source_path}/" for token in ["/crash", "/journal", "/logging", "/metrics", "/telemetry"]):
+				base_dir = "infrastructure/monitoring"
+				reason = "Detected crash/telemetry/logging IO -> infrastructure/monitoring"
+				confidence = "High"
+			elif _imports_child_process(modules):
+				base_dir = "infrastructure/container/bin"
+				reason = "Detected child_process execution -> infrastructure/container/bin"
+				confidence = "High"
+				if io_tail.startswith("scripts/"):
+					io_tail = io_tail[len("scripts/") :]
+			elif _looks_like_http_client(code, modules):
+				base_dir = "infrastructure/external_services/clients"
+				reason = "Detected external HTTP client usage -> infrastructure/external_services/clients"
+				confidence = "High"
+
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file(base_dir, io_tail, py_filename),
+				reason=reason,
+				confidence=confidence,
+			)
 
 	# --- Package-first special cases (clear boundaries) ---
+	if pkg == "core":
+		# Core runtime: execution engine orchestration + node loading + infra wiring.
+		if rel.startswith("src/execution-engine/"):
+			tail = rel[len("src/execution-engine/") :]
+			return _target(
+				context,
+				"Application",
+				_join_dir_file("application/services/execution_engine", tail, py_filename),
+				reason="Core execution engine -> application/services/execution_engine",
+				confidence="High",
+			)
+		if rel.startswith("src/binary-data/"):
+			tail = rel[len("src/binary-data/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/external_services/adapters/file_storage/binary_data", tail, py_filename),
+				reason="Core binary-data storage -> infrastructure file_storage adapter",
+				confidence="High",
+			)
+		if rel.startswith("src/nodes-loader/"):
+			tail = rel[len("src/nodes-loader/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/nodes_loader", tail, py_filename),
+				reason="Node loading/discovery -> infrastructure/container/nodes_loader",
+				confidence="High",
+			)
+		if rel.startswith("src/instance-settings/"):
+			tail = rel[len("src/instance-settings/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/instance_settings", tail, py_filename),
+				reason="Instance settings wiring -> infrastructure/configuration",
+				confidence="High",
+			)
+		if rel.startswith("src/encryption/"):
+			tail = rel[len("src/encryption/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/security/encryption", tail, py_filename),
+				reason="Encryption implementation -> infrastructure/container/security",
+				confidence="High",
+			)
+		if rel.startswith("src/utils/"):
+			tail = rel[len("src/utils/") :]
+			return _target(
+				context,
+				"Application",
+				_join_dir_file("application/services/utils", tail, py_filename),
+				reason="Core utility helpers -> application/services/utils",
+				confidence="Medium",
+			)
+		if rel.startswith("src/"):
+			tail = rel[len("src/") :]
+			return _target(
+				context,
+				"Application",
+				_join_dir_file("application/services/execution_engine", tail, py_filename),
+				reason="Core src/* defaulted to execution engine application services",
+				confidence="Medium",
+			)
+
 	if pkg == "@n8n/api-types":
 		# Shared request/response DTO contracts (FE/BE).
 		if not rel.startswith("src/"):
 			return _target(
 				context,
 				"Infrastructure",
-				rel,
-				reason="Package @n8n/api-types tooling/config -> service root",
+				_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+				reason="Package @n8n/api-types tooling/config file",
 				confidence="Medium",
 			)
 		rel_tail = rel[len("src/") :]
@@ -200,8 +621,8 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 			return _target(
 				context,
 				"Infrastructure",
-				rel,
-				reason="Package @n8n/db tooling/config -> service root",
+				_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+				reason="Package @n8n/db tooling/config file",
 				confidence="Medium",
 			)
 		if rel.startswith("src/entities/"):
@@ -242,6 +663,14 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 
 	if pkg in {"nodes-base", "@n8n/nodes-langchain"}:
 		# Integration implementations & credentials for external systems.
+		if "/" not in rel:
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+				reason="Integration package tooling/config file",
+				confidence="Medium",
+			)
 		if rel.startswith("credentials/"):
 			tail = rel[len("credentials/") :]
 			return _target(
@@ -269,6 +698,14 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 		)
 
 	if pkg == "@n8n/errors":
+		if not rel.startswith("src/"):
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+				reason="Package @n8n/errors tooling/config file",
+				confidence="Medium",
+			)
 		tail = rel[len("src/") :] if rel.startswith("src/") else rel
 		return _target(
 			context,
@@ -279,6 +716,14 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 		)
 
 	if pkg == "workflow":
+		if not rel.startswith("src/"):
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+				reason="Package workflow tooling/config file",
+				confidence="Medium",
+			)
 		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
 		if "/errors/" in f"/{rel_tail}/":
 			tail = rel_tail.split("errors/", 1)[1]
@@ -297,13 +742,315 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 			confidence="Medium",
 		)
 
-	# Package root files (usually tooling/config) map to service root.
+	if pkg == "@n8n/permissions":
+		# Permission and role rules are domain policies (pure rule evaluation, no IO).
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Domain",
+			_join_dir_file("domain/policies", rel_tail, py_filename),
+			reason="Package @n8n/permissions treated as domain authorization policies",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/constants":
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Domain",
+			_join_dir_file("domain/models/constants", rel_tail, py_filename),
+			reason="Package @n8n/constants treated as domain constants",
+			confidence="High",
+		)
+
+	if pkg in {"@n8n/backend-common", "@n8n/config"}:
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/configuration", rel_tail, py_filename),
+			reason=f"Package {pkg} treated as infrastructure configuration/runtime environment",
+			confidence="High",
+		)
+
+	if pkg in {"@n8n/client-oauth2", "@n8n/imap", "@n8n/syslog-client"}:
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/external_services/clients", rel_tail, py_filename),
+			reason=f"Package {pkg} treated as external service client library",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/extension-sdk":
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		if rel.startswith("scripts/"):
+			tail = rel[len("scripts/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling", tail, py_filename),
+				reason="Extension SDK tooling script -> infrastructure/configuration/tooling",
+				confidence="High",
+			)
+		return _target(
+			context,
+			"Interface",
+			_join_dir_file("presentation/dto/extension_sdk", rel_tail, py_filename),
+			reason="Extension SDK contracts/helpers -> presentation/dto",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/utils":
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		if "event-bus" in rel or "event-queue" in rel:
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/event_bus", rel_tail, py_filename),
+				reason="Event bus/queue helpers -> infrastructure/event_bus",
+				confidence="High",
+			)
+		if rel.startswith("src/files/") or "/files/" in f"/{rel}/":
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/files", rel_tail, py_filename),
+				reason="Filesystem/path helpers -> infrastructure/container/files",
+				confidence="High",
+			)
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services/utils", rel_tail, py_filename),
+			reason="Generic shared utilities -> application/services/utils",
+			confidence="High",
+		)
+
+	if pkg == "extensions":
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/configuration/tooling/extensions", rel, py_filename),
+			reason="Extensions package -> infrastructure/configuration/tooling/extensions",
+			confidence="High",
+		)
+
+	if pkg == "node-dev":
+		if rel.startswith("commands/"):
+			tail = rel[len("commands/") :]
+			return _target(
+				context,
+				"Interface",
+				_join_dir_file("presentation/cli/commands", tail, py_filename),
+				reason="node-dev command -> presentation/cli/commands",
+				confidence="High",
+			)
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Interface",
+			_join_dir_file("presentation/cli", rel_tail, py_filename),
+			reason="node-dev CLI tool -> presentation/cli",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/scan-community-package":
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/container/bin", rel, py_filename),
+			reason="Community package scanner CLI/tooling -> infrastructure/container/bin",
+			confidence="High",
+		)
+
+	if pkg in {"@n8n/eslint-config", "@n8n/eslint-plugin-community-nodes", "@n8n/stylelint-config", "@n8n/vitest-config"}:
+		# Lint/format tooling lives outside runtime layers.
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+			reason="Tooling package (lint/test config) -> infrastructure/configuration/tooling",
+			confidence="High",
+		)
+
+	if pkg in {"@n8n/backend-test-utils"}:
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("tests/mocks", rel, py_filename),
+			reason="Test utilities package -> tests/mocks",
+			confidence="High",
+		)
+
+	if pkg == "testing":
+		# Repo-wide testing harness (playwright + containers).
+		if rel.startswith("playwright/"):
+			tail = rel[len("playwright/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("tests/integration/ui/playwright", tail, py_filename),
+				reason="Testing package (playwright) -> tests/integration/ui/playwright",
+				confidence="High",
+			)
+		if rel.startswith("containers/"):
+			tail = rel[len("containers/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("tests/fixtures/containers", tail, py_filename),
+				reason="Testing package (containers harness) -> tests/fixtures/containers",
+				confidence="High",
+			)
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("tests", rel, py_filename),
+			reason="Testing package -> tests/*",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/benchmark":
+		# Performance benchmarking toolchain (k6 scenarios, env provisioning, API client).
+		if rel.startswith("scenarios/"):
+			tail = rel[len("scenarios/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("tests/functional/benchmarks/scenarios", tail, py_filename),
+				reason="Benchmark scenarios -> tests/functional/benchmarks/scenarios",
+				confidence="High",
+			)
+		if rel.startswith("scripts/"):
+			tail = rel[len("scripts/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/bin/benchmark", tail, py_filename),
+				reason="Benchmark scripts -> infrastructure/container/bin",
+				confidence="High",
+			)
+		if rel.startswith("src/n8n-api-client/"):
+			tail = rel[len("src/n8n-api-client/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/external_services/clients/n8n_api_client", tail, py_filename),
+				reason="Benchmark n8n API client -> infrastructure/external_services/clients",
+				confidence="High",
+			)
+		if rel.startswith("src/test-execution/"):
+			tail = rel[len("src/test-execution/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container", tail, py_filename),
+				reason="Benchmark test execution (k6/process/metrics) -> infrastructure/container",
+				confidence="High",
+			)
+		# remaining benchmark code: treat as tooling application
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services", rel_tail, py_filename),
+			reason="Benchmark orchestration logic -> application/services",
+			confidence="Medium",
+		)
+
+	if pkg == "@n8n/json-schema-to-zod":
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services", rel_tail, py_filename),
+			reason="Pure schema->validator transformation library -> application/services",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/ai-workflow-builder.ee":
+		# Primarily application-level LLM workflow building logic (prompts/tools/state).
+		if rel.startswith("evaluations/") or rel.startswith("eval"):
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling/evaluations", rel, py_filename),
+				reason="AI builder evaluation harness/scripts -> infrastructure/configuration/tooling",
+				confidence="High",
+			)
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services", fallback_tail, py_filename),
+			reason="AI workflow builder package -> application/services",
+			confidence="High",
+		)
+
+	if pkg == "@n8n/node-cli":
+		# Node CLI scaffolding + templates + dev-time tooling.
+		if rel.startswith("scripts/"):
+			tail = rel[len("scripts/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/bin", tail, py_filename),
+				reason="CLI tooling script -> infrastructure/container/bin",
+				confidence="High",
+			)
+		if rel.startswith("src/test-utils/") or "/test-utils/" in f"/{rel}/":
+			tail = rel.split("test-utils/", 1)[-1]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("tests/mocks", tail, py_filename),
+				reason="CLI test utilities -> tests/mocks",
+				confidence="High",
+			)
+		if rel.startswith("src/template/"):
+			tail = rel[len("src/template/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/configuration/tooling/templates", tail, py_filename),
+				reason="CLI code templates -> infrastructure/configuration/tooling/templates",
+				confidence="High",
+			)
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		return _target(
+			context,
+			"Interface",
+			_join_dir_file("presentation/cli", rel_tail, py_filename),
+			reason="CLI package default -> presentation/cli",
+			confidence="Medium",
+		)
+
+	if pkg == "@n8n/task-runner":
+		rel_tail = rel[len("src/") :] if rel.startswith("src/") else rel
+		if rel_tail in {"start.ts", "start.js"}:
+			return _target(
+				context,
+				"Infrastructure",
+				"main.py",
+				reason="Task runner entrypoint -> main.py (BOOT)",
+				confidence="High",
+			)
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/container", rel_tail, py_filename),
+			reason="Task runner process runtime -> infrastructure/container",
+			confidence="High",
+		)
+
+	# Package root files (usually tooling/config) map to infrastructure configuration/tooling.
 	if "/" not in rel:
 		return _target(
 			context,
 			"Infrastructure",
-			rel,
-			reason="Package root file -> service root (tooling/config)",
+			_join_dir_file("infrastructure/configuration/tooling", rel, py_filename),
+			reason="Package root tooling/config file",
 			confidence="Medium",
 		)
 
@@ -352,6 +1099,18 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 			confidence="Medium",
 		)
 
+	# Routers / route tables
+	if "/routers/" in rel_norm or rel.startswith("src/routers/") or "/routes/" in rel_norm or rel.startswith("src/routes/"):
+		tail = rel.split("routers/", 1)[-1]
+		tail = tail.split("routes/", 1)[-1]
+		return _target(
+			context,
+			"Interface",
+			_join_dir_file("presentation/api/v1/routers", tail, py_filename),
+			reason="Routes/routers -> presentation/api/v1/routers",
+			confidence="High",
+		)
+
 	# Interface / HTTP adapter
 	if "/controllers/" in rel_norm or rel.startswith("src/controllers/"):
 		tail = rel.split("controllers/", 1)[-1]
@@ -392,6 +1151,81 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 			_join_dir_file("presentation/api/v1/controllers/webhooks", tail, py_filename),
 			reason="Webhook HTTP entry -> presentation/api/v1/controllers/webhooks",
 			confidence="High",
+		)
+
+	# Core execution engine & binary data storage
+	if pkg == "core" and "/execution-engine/" in rel_norm:
+		tail = rel.split("execution-engine/", 1)[-1]
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services/execution_engine", tail, py_filename),
+			reason="Core execution engine -> application/services/execution_engine",
+			confidence="High",
+		)
+
+	if pkg == "core" and "/binary-data/" in rel_norm:
+		tail = rel.split("binary-data/", 1)[-1]
+		return _target(
+			context,
+			"Infrastructure",
+			_join_dir_file("infrastructure/external_services/adapters/file_storage/binary_data", tail, py_filename),
+			reason="Core binary-data storage -> infrastructure file_storage adapter",
+			confidence="High",
+		)
+
+	# CLI backend: auth/executions lifecycle and related helpers are application orchestration by default.
+	if pkg == "cli" and rel.startswith("src/"):
+		for prefix, base_dir, label in [
+			("src/auth/", "application/services/auth", "Authentication helpers/use-cases"),
+			("src/executions/", "application/services/executions", "Execution read/write helpers"),
+			("src/execution-lifecycle/", "application/services/execution_lifecycle", "Execution lifecycle hooks"),
+			("src/deduplication/", "application/services/deduplication", "Deduplication helpers"),
+			("src/credentials/", "application/ports/outbound/credentials", "Credential resolution/storage ports"),
+			("src/chat/", "application/services/chat", "Chat feature helpers"),
+		]:
+			if rel.startswith(prefix):
+				tail = rel[len(prefix) :]
+				return _target(
+					context,
+					"Application",
+					_join_dir_file(base_dir, tail, py_filename),
+					reason=f"{label} -> {base_dir}",
+					confidence="Medium",
+				)
+
+		for prefix, base_dir, label in [
+			("src/push/", "presentation/api/push", "SSE/WebSocket push adapter"),
+			("src/collaboration/", "presentation/dto/collaboration", "Collaboration message contracts"),
+			("src/sso.ee/", "application/services/sso", "SSO integration orchestration"),
+		]:
+			if rel.startswith(prefix):
+				tail = rel[len(prefix) :]
+				return _target(
+					context,
+					"Interface" if base_dir.startswith("presentation/") else "Application",
+					_join_dir_file(base_dir, tail, py_filename),
+					reason=f"{label} -> {base_dir}",
+					confidence="Medium",
+				)
+
+		if rel.startswith("scripts/"):
+			tail = rel[len("scripts/") :]
+			return _target(
+				context,
+				"Infrastructure",
+				_join_dir_file("infrastructure/container/bin", tail, py_filename),
+				reason="CLI scripts -> infrastructure/container/bin",
+				confidence="High",
+			)
+
+		# CLI package default within src: application-level helpers (if not already matched above).
+		return _target(
+			context,
+			"Application",
+			_join_dir_file("application/services", fallback_tail, py_filename),
+			reason="CLI src/* defaulted to application/services after rule matching",
+			confidence="Medium",
 		)
 
 	# Persistence infrastructure
@@ -497,7 +1331,6 @@ def map_row_to_ddd(row: SourceRow) -> DddTarget:
 		)
 
 	# Fallback: treat as application-level module.
-	fallback_tail = rel[len("src/") :] if rel.startswith("src/") else rel
 	return _target(
 		context,
 		"Application",
@@ -637,6 +1470,11 @@ def write_mapping_matrix_md(
 	lines.append(f"- 源文档：`系统分析.md`（生成时间：{generated_at or '未知'}）")
 	lines.append("- 目标模板：`ddd四层微服务目录结构-python.md`")
 	lines.append("- 生成时间：" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+	lines.append(
+		"- 文件映射条目（file-level）："
+		+ str(len(file_mappings))
+		+ f"（High {Counter(m.confidence for m in file_mappings).get('High', 0)} | Medium {Counter(m.confidence for m in file_mappings).get('Medium', 0)} | Low {Counter(m.confidence for m in file_mappings).get('Low', 0)}）"
+	)
 	lines.append(root_warning_text.rstrip())
 	lines.append("")
 	lines.append("## 本文档包含内容（单一真源）")
@@ -672,31 +1510,44 @@ def write_mapping_matrix_md(
 	lines.append("")
 	lines.append("### 规则概览（按优先级）")
 	lines.append("")
-	lines.append("1. 包级强规则（高置信度）")
-	lines.append("   - `@n8n/api-types` → `presentation/dto/**`（但包根配置文件 → 服务根目录）")
-	lines.append("   - `@n8n/db` → `infrastructure/persistence/**`（entities/repositories/migrations 细分；包根配置文件 → 服务根目录）")
-	lines.append("   - `nodes-base`、`@n8n/nodes-langchain` → `infrastructure/external_services/**`（credentials/nodes 细分）")
-	lines.append("   - `@n8n/errors` → `domain/exceptions/**`")
-	lines.append("   - `workflow` → `domain/services/**`（errors → `domain/exceptions/**`）")
-	lines.append("2. 包根文件（通常为工具链/配置）")
-	lines.append("   - `<package-root>/<file>` → `services/<context>/<file>`（标记为 `Infrastructure`）")
-	lines.append("3. Interface（入站适配）")
-	lines.append("   - `*/controllers/**` → `presentation/api/v1/controllers/**`")
-	lines.append("   - `*/middlewares/**` 或 `*/middleware/**` → `presentation/api/middleware/**`")
-	lines.append("   - `cli/src/public-api/**` → `presentation/api/**`")
-	lines.append("   - `*/webhooks/**` → `presentation/api/v1/controllers/webhooks/**`")
-	lines.append("   - `cli/bin/n8n|n8n.cmd` → `main.py`")
+	lines.append("0. 源码信号优先（逐文件读取源码后判定）")
+	lines.append("   - `@n8n/decorators` + `@RestController/@Controller` → `presentation/api/v1/controllers/**`（Interface）")
+	lines.append("   - `express` + `RequestHandler|NextFunction|(req,res,next)` → `presentation/api/middleware/**`（Interface）")
+	lines.append("   - `express` + `Request|Response`（非 middleware）→ `presentation/api/**`（Interface）")
+	lines.append("   - `ws` + `WebSocket` → `presentation/api/ws/**`（Interface）")
+	lines.append("   - `@playwright/test|vitest|jest|describe()/it()/test()` → `tests/**`（标记为 Infrastructure；非生产代码）")
+	lines.append("   - `ResponseError`（定义或继承）→ `presentation/api/errors/**`（Interface）")
+	lines.append("   - `typeorm|@n8n/typeorm` + `@Entity` → `infrastructure/persistence/models/**`（Infrastructure）")
+	lines.append("   - `typeorm|@n8n/typeorm` + `MigrationInterface` → `infrastructure/persistence/migrations/**`（Infrastructure）")
+	lines.append("   - `typeorm|@n8n/typeorm` + `Repository|EntityManager` → `infrastructure/persistence/repositories/**`（Infrastructure）")
+	lines.append("   - `n8n-workflow` + `implements ICredentialType` → `infrastructure/external_services/adapters/credentials/**`（Infrastructure）")
+	lines.append("   - `n8n-workflow` + `implements INodeType` → `infrastructure/external_services/adapters/nodes/**`（Infrastructure）")
+	lines.append("   - `@n8n/di` + `@Service` → `application/services/**`（Application）")
+	lines.append("   - `xmllint-wasm` + `XMLFileInfo` → `infrastructure/configuration/**`（Infrastructure）")
+	lines.append("   - `fs|http|child_process|axios|fetch` → `infrastructure/**`（Infrastructure；I/O/外部交互）")
+	lines.append("1. 包级强规则（高置信度；用于补齐源码信号不足的文件）")
+	lines.append("   - `@n8n/api-types/src/**` → `presentation/dto/**`；包根配置 → `infrastructure/configuration/tooling/**`")
+	lines.append("   - `@n8n/db/src/**` → `infrastructure/persistence/**`；包根配置 → `infrastructure/configuration/tooling/**`")
+	lines.append("   - `nodes-base/**`、`@n8n/nodes-langchain/**` → `infrastructure/external_services/**`；包根配置 → `infrastructure/configuration/tooling/**`")
+	lines.append("   - `@n8n/errors/src/**` → `domain/exceptions/**`；包根配置 → `infrastructure/configuration/tooling/**`")
+	lines.append("   - `workflow/src/**` → `domain/services/**`（errors → `domain/exceptions/**`）；包根配置 → `infrastructure/configuration/tooling/**`")
+	lines.append("   - `@n8n/permissions/src/**` → `domain/policies/**`（Domain）")
+	lines.append("   - `@n8n/constants/src/**` → `domain/models/constants/**`（Domain）")
+	lines.append("   - `testing/**` → `tests/**`（Infrastructure；测试工具包）")
+	lines.append("   - `@n8n/benchmark/**` → `tests/functional/benchmarks/**`、`infrastructure/container/bin/**` 等（Infrastructure）")
+	lines.append("   - `@n8n/eslint-config|...` → `infrastructure/configuration/tooling/**`（Infrastructure；工具包）")
+	lines.append("2. 目录启发式（当源码信号不足时）")
 	lines.append("   - `*/src/commands/**`：CLI 类包 → `presentation/cli/commands/**`；非 CLI 包 → `application/commands/handlers/**`")
-	lines.append("4. Infrastructure（出站/技术实现）")
-	lines.append("   - `*/databases/**`、`*/repositories/**`、`*/migrations/**`、`*/entities/**` → `infrastructure/persistence/**`")
-	lines.append("   - `*/config/**`、`*/configs/**` → `infrastructure/configuration/**`")
-	lines.append("   - `*/eventbus/**`、`*/events/**` → `infrastructure/event_bus/**`")
-	lines.append("   - `*/telemetry/**`、`*/metrics/**`、`*/posthog/**`、`*/logging/**`、`*/tracing/**` → `infrastructure/monitoring/**`")
-	lines.append("   - `*/di/**`、`*/container/**` 或包为 `@n8n/di`、`@n8n/decorators` → `infrastructure/container/**`")
-	lines.append("   - `*/bin/**`（非 `cli` 的 bin 脚本）→ `infrastructure/container/bin/**`")
-	lines.append("5. Application（用例/编排，默认兜底）")
-	lines.append("   - `*/services/**` 或 `*/modules/**` → `application/services/**`")
-	lines.append("   - 其他未命中的代码文件 → `application/services/**`（`confidence=Low`，需人工复核）")
+	lines.append("   - `cli/bin/n8n|n8n.cmd` → `main.py`")
+	lines.append("   - `*/routes|routers/**` → `presentation/api/v1/routers/**`（Interface）")
+	lines.append("   - `core/src/execution-engine/**` → `application/services/execution_engine/**`（Application）")
+	lines.append("   - `core/src/binary-data/**` → `infrastructure/.../file_storage/binary_data/**`（Infrastructure）")
+	lines.append("   - `*/databases|repositories|migrations|entities/**` → `infrastructure/persistence/**`")
+	lines.append("   - `*/config|configs/**` → `infrastructure/configuration/**`")
+	lines.append("   - `*/eventbus|events/**` → `infrastructure/event_bus/**`")
+	lines.append("   - `*/telemetry|metrics|posthog|logging|tracing/**` → `infrastructure/monitoring/**`")
+	lines.append("3. 兜底（需人工复核）")
+	lines.append("   - 未命中的代码文件 → `application/services/**`（`confidence=Low`）")
 	lines.append("")
 	lines.append("> 说明：该映射为“预重构”阶段的启发式归类；正式迁移批次仍需按职责/依赖关系人工复核与拆分。")
 	lines.append("")

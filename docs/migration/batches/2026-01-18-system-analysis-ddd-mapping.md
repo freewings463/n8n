@@ -52,5 +52,5 @@ scope:
 
 - 源分析生成时间：2026-01-18 10:45:03
 - 文件条目总数：5739
-- Layer 统计：{'Infrastructure': 4070, 'Application': 1223, 'Domain': 189, 'Interface': 257}
+- Layer 统计：{'Application': 674, 'Infrastructure': 4601, 'Interface': 346, 'Domain': 118}
 - Context Top10：{'nodes-base': 3054, 'cli': 703, 'n8n-nodes-langchain': 458, 'n8n-db': 353, 'n8n-ai-workflow-builder-ee': 209, 'testing': 150, 'n8n-api-types': 132, 'core': 125, 'workflow': 101, 'n8n-node-cli': 73}
