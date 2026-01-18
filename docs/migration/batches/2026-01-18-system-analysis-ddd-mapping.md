@@ -6,7 +6,7 @@ owner: "TBD"
 base_commit: "TBD"
 status: planned
 scope:
-  bounded_contexts: ["(auto from packages/*)"]
+  bounded_contexts: ["n8n"]
   layers: ["Domain", "Application", "Interface", "Infrastructure"]
 ---
 
@@ -36,8 +36,8 @@ scope:
 
 ## 5. 决策记录（Decisions）与遗留问题（Open Issues）
 
-- Decisions：按 `packages/<pkg>`（或 `packages/@n8n/<pkg>`）作为默认限界上下文名来源，映射到 `services/{context}/...`。
-- Open Issues：该规则为启发式；需对 `packages/cli`、`packages/core` 等混层包进行人工复核与拆分策略。
+- Decisions：采用单服务策略，将所有模块合并映射到 `services/n8n/...`（target_context 固定）。
+- Open Issues：该规则为启发式；仍需对 `packages/cli`、`packages/core` 等混层包进行人工复核与拆分策略。
 
 ## 6. 回退方案（Rollback）
 
@@ -53,4 +53,5 @@ scope:
 - 源分析生成时间：2026-01-18 10:45:03
 - 文件条目总数：5739
 - Layer 统计：{'Application': 674, 'Infrastructure': 4601, 'Interface': 346, 'Domain': 118}
-- Context Top10：{'nodes-base': 3054, 'cli': 703, 'n8n-nodes-langchain': 458, 'n8n-db': 353, 'n8n-ai-workflow-builder-ee': 209, 'testing': 150, 'n8n-api-types': 132, 'core': 125, 'workflow': 101, 'n8n-node-cli': 73}
+- Context Top10：{'n8n': 5739}
+- Context 去重数量：1

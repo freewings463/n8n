@@ -25,6 +25,19 @@ class DddTarget:
 	confidence: str  # High|Medium|Low
 
 
+@dataclass(frozen=True)
+class ContextConfig:
+	"""
+	Controls how we derive `target_context` (i.e. microservice directory name).
+
+	- single: collapse all packages into a single service, e.g. `services/n8n/...`
+	- per-package: keep the previous behavior: `packages/<pkg>` -> `services/<pkg>/...`
+	"""
+
+	strategy: str  # single|per-package
+	single_context: str = "n8n"
+
+
 SYSTEM_ANALYSIS_ROW_RE = re.compile(r"^\| `([^`]+)` \| (.*) \|\s*$")
 SYSTEM_ANALYSIS_TIME_RE = re.compile(r"^- 生成时间: (.+)$")
 
@@ -206,6 +219,12 @@ def _to_service_name(package_id: str) -> str:
 	return normalized.lower()
 
 
+def _resolve_target_context(package_id: str, config: ContextConfig) -> str:
+	if config.strategy == "single":
+		return config.single_context
+	return _to_service_name(package_id)
+
+
 def _to_python_module_filename(filename: str) -> str:
 	# Keep mapping deterministic and human-friendly. (Not perfect import semantics.)
 	if filename in {"index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"}:
@@ -337,9 +356,9 @@ def _target(
 	)
 
 
-def map_row_to_ddd(row: SourceRow) -> DddTarget:
+def map_row_to_ddd(row: SourceRow, *, context_config: ContextConfig) -> DddTarget:
 	pkg = _package_id(row.source_path)
-	context = _to_service_name(pkg)
+	context = _resolve_target_context(pkg, context_config)
 	rel = _relative_to_package_root(row.source_path)
 	filename = Path(row.source_path).name
 	py_filename = _to_python_module_filename(filename)
@@ -1358,14 +1377,19 @@ def _md_escape(text: str) -> str:
 	return text.replace("\n", " ").replace("\r", "").replace("|", "\\|").strip()
 
 
-def build_file_mapping_md_tables(source_rows: list[SourceRow], file_mappings: list[DddTarget]) -> list[str]:
+def build_file_mapping_md_tables(
+	source_rows: list[SourceRow],
+	file_mappings: list[DddTarget],
+	*,
+	context_config: ContextConfig,
+) -> list[str]:
 	by_package_rows: dict[str, list[int]] = defaultdict(list)
 	for i, row in enumerate(source_rows):
 		by_package_rows[_package_id(row.source_path)].append(i)
 
 	lines: list[str] = []
 	for pkg in sorted(by_package_rows.keys()):
-		context = _to_service_name(pkg)
+		context = _resolve_target_context(pkg, context_config)
 		lines.append(f"### `{pkg}` → `{context}`")
 		lines.append("")
 		lines.append("| old_path | new_path | target_context | target_layer | reason | confidence |")
@@ -1399,6 +1423,7 @@ def write_mapping_matrix_md(
 	source_rows: list[SourceRow],
 	file_mappings: list[DddTarget],
 	ddd_structure: set[str],
+	context_config: ContextConfig,
 ) -> None:
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1459,23 +1484,33 @@ def write_mapping_matrix_md(
 			if not is_file_like:
 				root_warnings.append(root)
 
-	root_warning_text = ""
-	if root_warnings:
-		common = ", ".join(sorted(set(root_warnings))[:10])
-		root_warning_text = f"\n> 注意：发现部分输出根目录不在模板顶层集合中：{common}（需人工复核规则）。\n"
+		root_warning_text = ""
+		if root_warnings:
+			common = ", ".join(sorted(set(root_warnings))[:10])
+			root_warning_text = f"\n> 注意：发现部分输出根目录不在模板顶层集合中：{common}（需人工复核规则）。\n"
 
-	lines: list[str] = []
-	lines.append("# DDD 迁移映射矩阵（由 系统分析.md 自动生成）")
-	lines.append("")
-	lines.append(f"- 源文档：`系统分析.md`（生成时间：{generated_at or '未知'}）")
-	lines.append("- 目标模板：`ddd四层微服务目录结构-python.md`")
-	lines.append("- 生成时间：" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-	lines.append(
-		"- 文件映射条目（file-level）："
-		+ str(len(file_mappings))
-		+ f"（High {Counter(m.confidence for m in file_mappings).get('High', 0)} | Medium {Counter(m.confidence for m in file_mappings).get('Medium', 0)} | Low {Counter(m.confidence for m in file_mappings).get('Low', 0)}）"
-	)
-	lines.append(root_warning_text.rstrip())
+		lines: list[str] = []
+		lines.append("# DDD 迁移映射矩阵（由 系统分析.md 自动生成）")
+		lines.append("")
+		lines.append(f"- 源文档：`系统分析.md`（生成时间：{generated_at or '未知'}）")
+		lines.append("- 目标模板：`ddd四层微服务目录结构-python.md`")
+		lines.append("- 生成时间：" + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+		lines.append(
+			"- 微服务映射策略："
+			+ ("单服务（single）" if context_config.strategy == "single" else "按包（per-package）")
+			+ (
+				f"（services/{context_config.single_context}/...）"
+				if context_config.strategy == "single"
+				else "（services/<context>/...）"
+			)
+		)
+		lines.append(
+			"- 文件映射条目（file-level）："
+			+ str(len(file_mappings))
+			+ f"（High {Counter(m.confidence for m in file_mappings).get('High', 0)} | Medium {Counter(m.confidence for m in file_mappings).get('Medium', 0)} | Low {Counter(m.confidence for m in file_mappings).get('Low', 0)}）"
+		)
+		lines.append(f"- 微服务数量（target_context 去重）：{len(set(m.target_context for m in file_mappings))}")
+		lines.append(root_warning_text.rstrip())
 	lines.append("")
 	lines.append("## 本文档包含内容（单一真源）")
 	lines.append("")
@@ -1558,7 +1593,7 @@ def write_mapping_matrix_md(
 	lines.append("|-------------|----------|---------------|----------|------------|")
 
 	for pkg in sorted(by_package_rows.keys()):
-		context = _to_service_name(pkg)
+		context = _resolve_target_context(pkg, context_config)
 		layer, confidence = _majority_layer(pkg_layer_counts[pkg])
 		lines.append(f"| `{pkg}` | {pkg_core[pkg]} | `{context}` | `{layer}` | `{confidence}` |")
 
@@ -1572,7 +1607,13 @@ def write_mapping_matrix_md(
 
 	lines.append("## 文件级映射清单（按包分组；表格）")
 	lines.append("")
-	lines.extend(build_file_mapping_md_tables(source_rows, file_mappings))
+	lines.extend(
+		build_file_mapping_md_tables(
+			source_rows,
+			file_mappings,
+			context_config=context_config,
+		)
+	)
 
 	out_path.write_text("\n".join([line for line in lines if line is not None]), encoding="utf-8")
 
@@ -1584,6 +1625,7 @@ def write_batch_doc_md(
 	source_generated_at: str | None,
 	source_rows: list[SourceRow],
 	file_mappings: list[DddTarget],
+	context_config: ContextConfig,
 ) -> None:
 	out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1599,7 +1641,10 @@ def write_batch_doc_md(
 	lines.append("base_commit: \"TBD\"")
 	lines.append("status: planned")
 	lines.append("scope:")
-	lines.append("  bounded_contexts: [\"(auto from packages/*)\"]")
+	if context_config.strategy == "single":
+		lines.append(f"  bounded_contexts: [\"{context_config.single_context}\"]")
+	else:
+		lines.append("  bounded_contexts: [\"(auto from packages/*)\"]")
 	lines.append("  layers: [\"Domain\", \"Application\", \"Interface\", \"Infrastructure\"]")
 	lines.append("---")
 	lines.append("")
@@ -1631,8 +1676,15 @@ def write_batch_doc_md(
 	lines.append("")
 	lines.append("## 5. 决策记录（Decisions）与遗留问题（Open Issues）")
 	lines.append("")
-	lines.append("- Decisions：按 `packages/<pkg>`（或 `packages/@n8n/<pkg>`）作为默认限界上下文名来源，映射到 `services/{context}/...`。")
-	lines.append("- Open Issues：该规则为启发式；需对 `packages/cli`、`packages/core` 等混层包进行人工复核与拆分策略。")
+	if context_config.strategy == "single":
+		lines.append(
+			f"- Decisions：采用单服务策略，将所有模块合并映射到 `services/{context_config.single_context}/...`（target_context 固定）。"
+		)
+	else:
+		lines.append(
+			"- Decisions：按 `packages/<pkg>`（或 `packages/@n8n/<pkg>`）作为默认限界上下文名来源，映射到 `services/{context}/...`。"
+		)
+	lines.append("- Open Issues：该规则为启发式；仍需对 `packages/cli`、`packages/core` 等混层包进行人工复核与拆分策略。")
 	lines.append("")
 	lines.append("## 6. 回退方案（Rollback）")
 	lines.append("")
@@ -1649,6 +1701,7 @@ def write_batch_doc_md(
 	lines.append(f"- 文件条目总数：{len(source_rows)}")
 	lines.append(f"- Layer 统计：{dict(by_layer)}")
 	lines.append(f"- Context Top10：{dict(by_context.most_common(10))}")
+	lines.append(f"- Context 去重数量：{len(by_context)}")
 	lines.append("")
 
 	out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -1663,12 +1716,25 @@ def main() -> int:
 		"--batch-id",
 		default=f"{datetime.now().strftime('%Y-%m-%d')}-system-analysis-ddd-mapping",
 	)
+	parser.add_argument(
+		"--context-strategy",
+		choices=["single", "per-package"],
+		default="single",
+		help="How to derive target_context (microservice directory name)",
+	)
+	parser.add_argument(
+		"--single-context",
+		default="n8n",
+		help="Service name used when --context-strategy=single (services/<name>/...)",
+	)
 	args = parser.parse_args()
+
+	context_config = ContextConfig(strategy=args.context_strategy, single_context=args.single_context)
 
 	generated_at, rows = parse_system_analysis(args.system_analysis)
 	ddd_structure = parse_ddd_structure(args.ddd_template)
 
-	mapped = [map_row_to_ddd(r) for r in rows]
+	mapped = [map_row_to_ddd(r, context_config=context_config) for r in rows]
 
 	matrix_path = args.out_dir / "mapping-matrix.md"
 	write_mapping_matrix_md(
@@ -1677,6 +1743,7 @@ def main() -> int:
 		source_rows=rows,
 		file_mappings=mapped,
 		ddd_structure=ddd_structure,
+		context_config=context_config,
 	)
 
 	batch_path = args.out_dir / "batches" / f"{args.batch_id}.md"
@@ -1686,6 +1753,7 @@ def main() -> int:
 		source_generated_at=generated_at,
 		source_rows=rows,
 		file_mappings=mapped,
+		context_config=context_config,
 	)
 
 	print(f"Wrote: {matrix_path}")
