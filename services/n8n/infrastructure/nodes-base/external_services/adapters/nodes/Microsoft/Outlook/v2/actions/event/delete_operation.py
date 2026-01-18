@@ -1,0 +1,51 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/nodes/Microsoft/Outlook/v2/actions/event/delete.operation.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/nodes/Microsoft/Outlook 的节点。导入/依赖:外部:@utils/utilities；内部:n8n-workflow；本地:../../descriptions、../helpers/utils、../../transport。导出:properties、description。关键函数/方法:execute。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Node integration -> external_services adapters (ACL)
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/nodes/Microsoft/Outlook/v2/actions/event/delete.operation.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/nodes/Microsoft/Outlook/v2/actions/event/delete_operation.py
+
+import type { IExecuteFunctions, INodeProperties } from 'n8n-workflow';
+
+import { updateDisplayOptions } from '@utils/utilities';
+
+import { calendarRLC, eventRLC } from '../../descriptions';
+import { decodeOutlookId } from '../../helpers/utils';
+import { microsoftApiRequest } from '../../transport';
+
+export const properties: INodeProperties[] = [calendarRLC, eventRLC];
+
+const displayOptions = {
+	show: {
+		resource: ['event'],
+		operation: ['delete'],
+	},
+};
+
+export const description = updateDisplayOptions(displayOptions, properties);
+
+export async function execute(this: IExecuteFunctions, index: number) {
+	const eventId = decodeOutlookId(
+		this.getNodeParameter('eventId', index, undefined, {
+			extractValue: true,
+		}) as string,
+	);
+
+	await microsoftApiRequest.call(this, 'DELETE', `/calendar/events/${eventId}`);
+
+	const executionData = this.helpers.constructExecutionMetaData(
+		this.helpers.returnJsonArray({ success: true }),
+		{ itemData: { item: index } },
+	);
+
+	return executionData;
+}

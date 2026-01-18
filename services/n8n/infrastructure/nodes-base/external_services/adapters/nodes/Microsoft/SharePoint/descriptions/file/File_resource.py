@@ -1,0 +1,90 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/nodes/Microsoft/SharePoint/descriptions/file/File.resource.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/nodes/Microsoft/SharePoint 的节点。导入/依赖:外部:无；内部:n8n-workflow；本地:./download.operation、./update.operation、./upload.operation、../helpers/utils。导出:description。关键函数/方法:无。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Node integration -> external_services adapters (ACL)
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/nodes/Microsoft/SharePoint/descriptions/file/File.resource.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/nodes/Microsoft/SharePoint/descriptions/file/File_resource.py
+
+import type { INodeProperties } from 'n8n-workflow';
+
+import * as download from './download.operation';
+import * as update from './update.operation';
+import * as upload from './upload.operation';
+import { downloadFilePostReceive, handleErrorPostReceive } from '../../helpers/utils';
+
+export const description: INodeProperties[] = [
+	{
+		displayName: 'Operation',
+		name: 'operation',
+		type: 'options',
+		noDataExpression: true,
+		displayOptions: {
+			show: {
+				resource: ['file'],
+			},
+		},
+		options: [
+			{
+				name: 'Download',
+				value: 'download',
+				description: 'Download a file',
+				routing: {
+					request: {
+						method: 'GET',
+						url: '=/sites/{{ $parameter["site"] }}/drive/items/{{ $parameter["file"] }}/content',
+						json: false,
+						encoding: 'arraybuffer',
+					},
+					output: {
+						postReceive: [handleErrorPostReceive, downloadFilePostReceive],
+					},
+				},
+				action: 'Download file',
+			},
+			{
+				name: 'Update',
+				value: 'update',
+				description: 'Update a file',
+				routing: {
+					request: {
+						method: 'PATCH',
+						url: '=/sites/{{ $parameter["site"] }}/drive/items/{{ $parameter["file"] }}',
+					},
+					output: {
+						postReceive: [handleErrorPostReceive],
+					},
+				},
+				action: 'Update file',
+			},
+			{
+				name: 'Upload',
+				value: 'upload',
+				description: 'Upload an existing file',
+				routing: {
+					request: {
+						method: 'PUT',
+						url: '=/sites/{{ $parameter["site"] }}/drive/items/{{ $parameter["folder"] }}:/{{ $parameter["fileName"] }}:/content',
+					},
+					output: {
+						postReceive: [handleErrorPostReceive],
+					},
+				},
+				action: 'Upload file',
+			},
+		],
+		default: 'download',
+	},
+
+	...download.description,
+	...update.description,
+	...upload.description,
+];

@@ -1,0 +1,244 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/nodes/MonicaCrm/descriptions/NoteDescription.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/nodes/MonicaCrm/descriptions 的节点。导入/依赖:外部:无；内部:n8n-workflow；本地:无。导出:noteOperations、noteFields。关键函数/方法:无。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Node integration -> external_services adapters (ACL)
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/nodes/MonicaCrm/descriptions/NoteDescription.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/nodes/MonicaCrm/descriptions/NoteDescription.py
+
+import type { INodeProperties } from 'n8n-workflow';
+
+export const noteOperations: INodeProperties[] = [
+	{
+		displayName: 'Operation',
+		name: 'operation',
+		type: 'options',
+		noDataExpression: true,
+		displayOptions: {
+			show: {
+				resource: ['note'],
+			},
+		},
+		options: [
+			{
+				name: 'Create',
+				value: 'create',
+				description: 'Create a note',
+				action: 'Create a note',
+			},
+			{
+				name: 'Delete',
+				value: 'delete',
+				description: 'Delete a note',
+				action: 'Delete a note',
+			},
+			{
+				name: 'Get',
+				value: 'get',
+				description: 'Retrieve a note',
+				action: 'Get a note',
+			},
+			{
+				name: 'Get Many',
+				value: 'getAll',
+				description: 'Retrieve many notes',
+				action: 'Get many notes',
+			},
+			{
+				name: 'Update',
+				value: 'update',
+				description: 'Update a note',
+				action: 'Update a note',
+			},
+		],
+		default: 'create',
+	},
+];
+
+export const noteFields: INodeProperties[] = [
+	// ----------------------------------------
+	//               note: create
+	// ----------------------------------------
+	{
+		displayName: 'Contact ID',
+		name: 'contactId',
+		description: 'ID of the contact to associate the note with',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['create'],
+			},
+		},
+	},
+	{
+		displayName: 'Body',
+		name: 'body',
+		description: 'Body of the note - max 100,000 characters',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['create'],
+			},
+		},
+	},
+	{
+		displayName: 'Additional Fields',
+		name: 'additionalFields',
+		type: 'collection',
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['create'],
+			},
+		},
+		options: [
+			{
+				displayName: 'Is Favorited',
+				name: 'isFavorited',
+				description: 'Whether the note has been favorited',
+				type: 'boolean',
+				default: false,
+			},
+		],
+	},
+
+	// ----------------------------------------
+	//               note: delete
+	// ----------------------------------------
+	{
+		displayName: 'Note ID',
+		name: 'noteId',
+		description: 'ID of the note to delete',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['delete'],
+			},
+		},
+	},
+
+	// ----------------------------------------
+	//                note: get
+	// ----------------------------------------
+	{
+		displayName: 'Note ID',
+		name: 'noteId',
+		description: 'ID of the note to retrieve',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['get'],
+			},
+		},
+	},
+
+	// ----------------------------------------
+	//               note: getAll
+	// ----------------------------------------
+	{
+		displayName: 'Return All',
+		name: 'returnAll',
+		type: 'boolean',
+		default: false,
+		description: 'Whether to return all results or only up to a given limit',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['getAll'],
+			},
+		},
+	},
+	{
+		displayName: 'Limit',
+		name: 'limit',
+		type: 'number',
+		default: 50,
+		description: 'Max number of results to return',
+		typeOptions: {
+			minValue: 1,
+		},
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['getAll'],
+				returnAll: [false],
+			},
+		},
+	},
+
+	// ----------------------------------------
+	//               note: update
+	// ----------------------------------------
+	{
+		displayName: 'Note ID',
+		name: 'noteId',
+		description: 'ID of the note to update',
+		type: 'string',
+		required: true,
+		default: '',
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['update'],
+			},
+		},
+	},
+	{
+		displayName: 'Update Fields',
+		name: 'updateFields',
+		type: 'collection',
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: {
+			show: {
+				resource: ['note'],
+				operation: ['update'],
+			},
+		},
+		options: [
+			{
+				displayName: 'Body',
+				name: 'body',
+				description: 'Body of the note - max 100,000 characters',
+				type: 'string',
+				default: '',
+			},
+			{
+				displayName: 'Contact ID',
+				name: 'contact_id',
+				description: 'ID of the contact to associate the note with',
+				type: 'string',
+				default: '',
+			},
+			{
+				displayName: 'Is Favorited',
+				name: 'is_favorited',
+				description: 'Whether the note has been favorited',
+				type: 'boolean',
+				default: false,
+			},
+		],
+	},
+];

@@ -1,0 +1,80 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/credentials/ElasticsearchApi.credentials.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/credentials 的凭证。导入/依赖:外部:无；内部:无；本地:无。导出:ElasticsearchApi。关键函数/方法:无。用于声明 n8n 该模块鉴权字段/校验规则，供节点引用。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Detected ICredentialType adapter
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/credentials/ElasticsearchApi.credentials.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/credentials/ElasticsearchApi_credentials.py
+
+import type {
+	IAuthenticateGeneric,
+	ICredentialTestRequest,
+	ICredentialType,
+	INodeProperties,
+} from 'n8n-workflow';
+
+export class ElasticsearchApi implements ICredentialType {
+	name = 'elasticsearchApi';
+
+	displayName = 'Elasticsearch API';
+
+	documentationUrl = 'elasticsearch';
+
+	properties: INodeProperties[] = [
+		{
+			displayName: 'Username',
+			name: 'username',
+			type: 'string',
+			default: '',
+		},
+		{
+			displayName: 'Password',
+			name: 'password',
+			type: 'string',
+			typeOptions: {
+				password: true,
+			},
+			default: '',
+		},
+		{
+			displayName: 'Base URL',
+			name: 'baseUrl',
+			type: 'string',
+			default: '',
+			placeholder: 'https://mydeployment.es.us-central1.gcp.cloud.es.io:9243',
+			description: "Referred to as Elasticsearch 'endpoint' in the Elastic deployment dashboard",
+		},
+		{
+			displayName: 'Ignore SSL Issues (Insecure)',
+			name: 'ignoreSSLIssues',
+			type: 'boolean',
+			default: false,
+		},
+	];
+
+	authenticate: IAuthenticateGeneric = {
+		type: 'generic',
+		properties: {
+			auth: {
+				username: '={{$credentials.username}}',
+				password: '={{$credentials.password}}',
+			},
+		},
+	};
+
+	test: ICredentialTestRequest = {
+		request: {
+			baseURL: '={{$credentials.baseUrl}}'.replace(/\/$/, ''),
+			url: '/_xpack?human=false',
+			skipSslCertificateValidation: '={{$credentials.ignoreSSLIssues}}',
+		},
+	};
+}

@@ -1,0 +1,49 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/credentials/TotpApi.credentials.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/credentials 的凭证。导入/依赖:外部:无；内部:n8n-workflow；本地:无。导出:TotpApi。关键函数/方法:无。用于声明 n8n 该模块鉴权字段/校验规则，供节点引用。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Detected ICredentialType adapter
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/credentials/TotpApi.credentials.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/credentials/TotpApi_credentials.py
+
+import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+
+export class TotpApi implements ICredentialType {
+	name = 'totpApi';
+
+	displayName = 'TOTP API';
+
+	documentationUrl = 'totp';
+
+	properties: INodeProperties[] = [
+		{
+			displayName: 'Secret',
+			name: 'secret',
+			type: 'string',
+			typeOptions: { password: true },
+			default: '',
+			placeholder: 'e.g. BVDRSBXQB2ZEL5HE',
+			required: true,
+			description:
+				'Secret key encoded in the QR code during setup. <a href="https://github.com/google/google-authenticator/wiki/Key-Uri-Format#secret">Learn more</a>.',
+		},
+		{
+			displayName: 'Label',
+			name: 'label',
+			type: 'string',
+			default: '',
+			required: true,
+			placeholder: 'e.g. GitHub:john-doe',
+			description:
+				'Identifier for the TOTP account, in the <code>issuer:username</code> format. <a href="https://github.com/google/google-authenticator/wiki/Key-Uri-Format#label">Learn more</a>.',
+		},
+	];
+}

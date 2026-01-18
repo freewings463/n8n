@@ -1,0 +1,78 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/credentials/Redis.credentials.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/credentials 的凭证。导入/依赖:外部:无；内部:n8n-workflow；本地:无。导出:Redis。关键函数/方法:无。用于声明 n8n 该模块鉴权字段/校验规则，供节点引用。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Detected ICredentialType adapter
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/credentials/Redis.credentials.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/credentials/Redis_credentials.py
+
+import type { ICredentialType, INodeProperties } from 'n8n-workflow';
+
+export class Redis implements ICredentialType {
+	name = 'redis';
+	displayName = 'Redis';
+	documentationUrl = 'redis';
+	properties: INodeProperties[] = [
+		{
+			displayName: 'Password',
+			name: 'password',
+			type: 'string',
+			typeOptions: {
+				password: true,
+			},
+			default: '',
+		},
+		{
+			displayName: 'User',
+			name: 'user',
+			type: 'string',
+			default: '',
+			hint: 'Leave blank for password-only auth',
+		},
+		{
+			displayName: 'Host',
+			name: 'host',
+			type: 'string',
+			default: 'localhost',
+		},
+		{
+			displayName: 'Port',
+			name: 'port',
+			type: 'number',
+			default: 6379,
+		},
+		{
+			displayName: 'Database Number',
+			name: 'database',
+			type: 'number',
+			default: 0,
+		},
+		{
+			displayName: 'SSL',
+			name: 'ssl',
+			type: 'boolean',
+			default: false,
+		},
+		{
+			displayName: 'Disable TLS Verification (insecure)',
+			name: 'disableTlsVerification',
+			type: 'boolean',
+			displayOptions: {
+				show: {
+					ssl: [true],
+				},
+			},
+			default: false,
+			description:
+				'Whether to disable TLS certificate verification. Enable this to use self-signed certificates. WARNING: This makes the connection less secure.',
+		},
+	];
+}

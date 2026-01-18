@@ -1,0 +1,51 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/nodes/SyncroMSP/v1/methods/loadOptions.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/nodes/SyncroMSP/v1 的节点。导入/依赖:外部:无；内部:n8n-workflow；本地:../transport。导出:无。关键函数/方法:getCustomers。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Node integration -> external_services adapters (ACL)
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/nodes/SyncroMSP/v1/methods/loadOptions.ts -> services/n8n/infrastructure/nodes-base/external_services/adapters/nodes/SyncroMSP/v1/methods/loadOptions.py
+
+import type { ILoadOptionsFunctions, INodePropertyOptions } from 'n8n-workflow';
+import { NodeOperationError } from 'n8n-workflow';
+
+import { apiRequestAllItems } from '../transport';
+
+// Get all the available channels
+
+export async function getCustomers(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+	const endpoint = 'customers';
+	const responseData = await apiRequestAllItems.call(this, 'GET', endpoint, {});
+
+	if (responseData === undefined) {
+		throw new NodeOperationError(this.getNode(), 'No data got returned');
+	}
+
+	const returnData: INodePropertyOptions[] = [];
+	for (const data of responseData) {
+		returnData.push({
+			name: data.fullname as string,
+			value: data.id as number,
+		});
+	}
+
+	returnData.sort((a, b) => {
+		if (a.name < b.name) {
+			return -1;
+		}
+		if (a.name > b.name) {
+			return 1;
+		}
+		return 0;
+	});
+
+	return returnData;
+}

@@ -1,0 +1,141 @@
+"""
+MIGRATION-META:
+  source_path: packages/nodes-base/nodes/ItemLists/V3/helpers/utils.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/nodes-base/nodes/ItemLists/V3 的节点。导入/依赖:外部:无；内部:@n8n/vm2、n8n-workflow；本地:无。导出:prepareFieldsArray、sortByCode、addBinariesToItem、typeToNumber。关键函数/方法:prepareFieldsArray、sortByCode、isBinaryUniqueSetup、addBinariesToItem、typeToNumber。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Detected test/non-production code -> tests/*
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/nodes-base/nodes/ItemLists/V3/helpers/utils.ts -> services/n8n/tests/nodes-base/unit/nodes/ItemLists/V3/helpers/utils.py
+
+import { NodeVM } from '@n8n/vm2';
+import type {
+	IExecuteFunctions,
+	IBinaryData,
+	INodeExecutionData,
+	GenericValue,
+} from 'n8n-workflow';
+import { ApplicationError, NodeOperationError } from 'n8n-workflow';
+
+export const prepareFieldsArray = (fields: string | string[], fieldName = 'Fields') => {
+	if (typeof fields === 'string') {
+		return fields
+			.split(',')
+			.map((entry) => entry.trim())
+			.filter((entry) => entry !== '');
+	}
+	if (Array.isArray(fields)) {
+		return fields;
+	}
+	throw new ApplicationError(
+		`The \'${fieldName}\' parameter must be a string of fields separated by commas or an array of strings.`,
+		{ level: 'warning' },
+	);
+};
+
+const returnRegExp = /\breturn\b/g;
+
+export function sortByCode(
+	this: IExecuteFunctions,
+	items: INodeExecutionData[],
+): INodeExecutionData[] {
+	const code = this.getNodeParameter('code', 0) as string;
+	if (!returnRegExp.test(code)) {
+		throw new NodeOperationError(
+			this.getNode(),
+			"Sort code doesn't return. Please add a 'return' statement to your code",
+		);
+	}
+
+	const mode = this.getMode();
+	const vm = new NodeVM({
+		console: mode === 'manual' ? 'redirect' : 'inherit',
+		sandbox: { items },
+	});
+
+	return vm.run(`module.exports = items.sort((a, b) => { ${code} })`);
+}
+
+type PartialBinaryData = Omit<IBinaryData, 'data'>;
+const isBinaryUniqueSetup = () => {
+	const binaries: PartialBinaryData[] = [];
+	return (binary: IBinaryData) => {
+		for (const existingBinary of binaries) {
+			if (
+				existingBinary.mimeType === binary.mimeType &&
+				existingBinary.fileType === binary.fileType &&
+				existingBinary.fileSize === binary.fileSize &&
+				existingBinary.fileExtension === binary.fileExtension
+			) {
+				return false;
+			}
+		}
+
+		binaries.push({
+			mimeType: binary.mimeType,
+			fileType: binary.fileType,
+			fileSize: binary.fileSize,
+			fileExtension: binary.fileExtension,
+		});
+
+		return true;
+	};
+};
+
+export function addBinariesToItem(
+	newItem: INodeExecutionData,
+	items: INodeExecutionData[],
+	uniqueOnly?: boolean,
+) {
+	const isBinaryUnique = uniqueOnly ? isBinaryUniqueSetup() : undefined;
+
+	for (const item of items) {
+		if (item.binary === undefined) continue;
+
+		for (const key of Object.keys(item.binary)) {
+			if (!newItem.binary) newItem.binary = {};
+			let binaryKey = key;
+			const binary = item.binary[key];
+
+			if (isBinaryUnique && !isBinaryUnique(binary)) {
+				continue;
+			}
+
+			// If the binary key already exists add a suffix to it
+			let i = 1;
+			while (newItem.binary[binaryKey] !== undefined) {
+				binaryKey = `${key}_${i}`;
+				i++;
+			}
+
+			newItem.binary[binaryKey] = binary;
+		}
+	}
+
+	return newItem;
+}
+
+export function typeToNumber(value: GenericValue): number {
+	if (typeof value === 'object') {
+		if (Array.isArray(value)) return 9;
+		if (value === null) return 10;
+		if (value instanceof Date) return 11;
+	}
+	const types = {
+		_string: 1,
+		_number: 2,
+		_bigint: 3,
+		_boolean: 4,
+		_symbol: 5,
+		_undefined: 6,
+		_object: 7,
+		_function: 8,
+	};
+	return types[`_${typeof value}`];
+}

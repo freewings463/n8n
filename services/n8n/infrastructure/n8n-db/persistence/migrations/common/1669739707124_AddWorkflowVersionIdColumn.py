@@ -1,0 +1,44 @@
+"""
+MIGRATION-META:
+  source_path: packages/@n8n/db/src/migrations/common/1669739707124-AddWorkflowVersionIdColumn.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/@n8n/db/src/migrations/common 的工作流迁移。导入/依赖:外部:uuid；内部:无；本地:../migration-types。导出:AddWorkflowVersionIdColumn1669739707124。关键函数/方法:up、down。用于定义工作流数据库迁移步骤（新增表/字段/索引等）。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Migration -> infrastructure/persistence/migrations
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/@n8n/db/src/migrations/common/1669739707124-AddWorkflowVersionIdColumn.ts -> services/n8n/infrastructure/n8n-db/persistence/migrations/common/1669739707124_AddWorkflowVersionIdColumn.py
+
+import { v4 as uuidv4 } from 'uuid';
+
+import type { MigrationContext, ReversibleMigration } from '../migration-types';
+
+type Workflow = { id: number };
+
+export class AddWorkflowVersionIdColumn1669739707124 implements ReversibleMigration {
+	async up({ escape, runQuery }: MigrationContext) {
+		const tableName = escape.tableName('workflow_entity');
+		const columnName = escape.columnName('versionId');
+
+		await runQuery(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} CHAR(36)`);
+
+		const workflowIds: Workflow[] = await runQuery(`SELECT id FROM ${tableName}`);
+		for (const { id } of workflowIds) {
+			await runQuery(`UPDATE ${tableName} SET ${columnName} = :versionId WHERE id = :id`, {
+				versionId: uuidv4(),
+				id,
+			});
+		}
+	}
+
+	async down({ escape, runQuery }: MigrationContext) {
+		const tableName = escape.tableName('workflow_entity');
+		const columnName = escape.columnName('versionId');
+		await runQuery(`ALTER TABLE ${tableName} DROP COLUMN ${columnName}`);
+	}
+}

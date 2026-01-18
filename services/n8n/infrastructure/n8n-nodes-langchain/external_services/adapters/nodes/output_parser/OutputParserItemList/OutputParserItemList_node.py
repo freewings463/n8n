@@ -1,0 +1,111 @@
+"""
+MIGRATION-META:
+  source_path: packages/@n8n/nodes-langchain/nodes/output_parser/OutputParserItemList/OutputParserItemList.node.ts
+  target_context: n8n
+  target_layer: Infrastructure
+  responsibility: 位于 packages/@n8n/nodes-langchain/nodes/output_parser/OutputParserItemList 的节点。导入/依赖:外部:@utils/output_parsers/N8nItemListOutputParser、@utils/sharedFields；内部:无；本地:无。导出:OutputParserItemList。关键函数/方法:getConnectionHintNoticeField、supplyData。用于实现 n8n 该模块节点的描述与执行逻辑，供工作流运行。
+  entities: []
+  external_dependencies: []
+  mapping_confidence: High
+  todo_refactor_ddd:
+    - Detected INodeType adapter
+    - Rewrite implementation for Infrastructure layer
+  moved_in_batch: 2026-01-18-system-analysis-ddd-mapping
+"""
+# TODO-REFACTOR-DDD: packages/@n8n/nodes-langchain/nodes/output_parser/OutputParserItemList/OutputParserItemList.node.ts -> services/n8n/infrastructure/n8n-nodes-langchain/external_services/adapters/nodes/output_parser/OutputParserItemList/OutputParserItemList_node.py
+
+import {
+	NodeConnectionTypes,
+	type INodeType,
+	type INodeTypeDescription,
+	type ISupplyDataFunctions,
+	type SupplyData,
+} from 'n8n-workflow';
+
+import { N8nItemListOutputParser } from '@utils/output_parsers/N8nItemListOutputParser';
+import { getConnectionHintNoticeField } from '@utils/sharedFields';
+
+export class OutputParserItemList implements INodeType {
+	description: INodeTypeDescription = {
+		displayName: 'Item List Output Parser',
+		name: 'outputParserItemList',
+		icon: 'fa:bars',
+		iconColor: 'black',
+		group: ['transform'],
+		version: 1,
+		description: 'Return the results as separate items',
+		defaults: {
+			name: 'Item List Output Parser',
+		},
+
+		codex: {
+			categories: ['AI'],
+			subcategories: {
+				AI: ['Output Parsers'],
+			},
+			resources: {
+				primaryDocumentation: [
+					{
+						url: 'https://docs.n8n.io/integrations/builtin/cluster-nodes/sub-nodes/n8n-nodes-langchain.outputparseritemlist/',
+					},
+				],
+			},
+		},
+
+		inputs: [],
+
+		outputs: [NodeConnectionTypes.AiOutputParser],
+		outputNames: ['Output Parser'],
+		properties: [
+			getConnectionHintNoticeField([NodeConnectionTypes.AiChain, NodeConnectionTypes.AiAgent]),
+			{
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add Option',
+				default: {},
+				options: [
+					{
+						displayName: 'Number Of Items',
+						name: 'numberOfItems',
+						type: 'number',
+						default: -1,
+						description:
+							'Defines how many items should be returned maximally. If set to -1, there is no limit.',
+					},
+					// For that to be easily possible the metadata would have to be returned and be able to be read.
+					// Would also be possible with a wrapper but that would be even more hacky and the output types
+					// would not be correct anymore.
+					// {
+					// 	displayName: 'Parse Output',
+					// 	name: 'parseOutput',
+					// 	type: 'boolean',
+					// 	default: true,
+					// 	description: 'Whether the output should be automatically be parsed or left RAW',
+					// },
+					{
+						displayName: 'Separator',
+						name: 'separator',
+						type: 'string',
+						default: '\\n',
+						description:
+							'Defines the separator that should be used to split the results into separate items. Defaults to a new line but can be changed depending on the data that should be returned.',
+					},
+				],
+			},
+		],
+	};
+
+	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
+		const options = this.getNodeParameter('options', itemIndex, {}) as {
+			numberOfItems?: number;
+			separator?: string;
+		};
+
+		const parser = new N8nItemListOutputParser(options);
+
+		return {
+			response: parser,
+		};
+	}
+}
